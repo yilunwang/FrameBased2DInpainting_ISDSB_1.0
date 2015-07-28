@@ -1,0 +1,184 @@
+function rimg = Innerloop_ISDSBFrame_inpainting(u,f,P,opts) ;
+%%%%%%%%%% Load the opts parameters and new Weights %%%%%%%%%%%%%%%%%%
+Level = opts.Level ;
+frame = opts.frame ;
+tol = opts.tol ;
+maxit = opts.maxit ;
+lambda = opts.lambda ;
+mu = opts.mu ;
+gamma = opts.gamma ;
+% sigma = opts.sigma ;
+M = opts.M ;
+picks = opts.picks ;
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+[D,R]=GenerateFrameletFilter(frame);nD=length(D);
+W  = @(x) FraDecMultiLevel(x,D,Level); % Frame decomposition
+WT = @(x) FraRecMultiLevel(x,R,Level); % Frame reconstruction
+[m,n]=size(u);
+% muLevel=getwThresh(2*lambda/mu,wLevel,Level,D);
+FT = @(x)fft2(x);
+IFT = @(x)ifft2(x);
+normg=norm(f,'fro');normW=cellnorm(W(f));
+
+%initialization
+u = opts.u ;% warm-startting ;
+b=W(u);
+d = b ;
+umean=0;dmean=W(u);bmean=dmean;
+T = zeros(1,maxit); T2 = 0;
+
+for nstep=1:maxit
+    
+    %%%%%%%%% solve u subproblem %%%%%%%%%%%%%%%%
+    uprev = u ;
+    C=CoeffOper('-',d,b);
+%    u=IFT(FT(mu*WT(C)+ATf+gamma*u)./eigenP);% 去模糊计算使用 ；deblurring；
+%      u=(mu*WT(C)+P.*f+gamma*u)./(P.^2+(mu+gamma));% 图像修补使用 ；inpanting ；
+
+%% --------------- 压缩感知使用1 ；
+%     X = zeros(m,n) ; X(picks) = f ;
+%     Denom = zeros(m,n) ; Denom(picks) = 1 ;
+%     Denom1 =  X + FT(mu*WT(C)) ;
+%     Denom2 = Denom+mu ;
+%     u = IFT(Denom1./Denom2) ;
+      
+%       u = IFT((X + FT(mu*WT(C))./(Denom+mu))) ;
+
+     %%%%%%%%%%% 压缩感知使用2 ；
+%  u = IFT((picks.*f + FT(mu*WT(C)))./(picks.^2 + (mu+gamma)));
+   u = IFT((picks.*f + FT(mu*WT(C)))./(picks + (mu+gamma)));
+%  Denom1 = picks.*f + FT(mu*WT(C)) ;
+%  Denom2 = picks.^2 + (mu+gamma) ;
+%  u = IFT(Denom1./Denom2) ;
+%------------------------------------------------  
+
+%%%%%%%%% --------------------------------------------------------
+u(u>255)=255; u(u<0)=0; % original setting ; %% 有没有这一步，将会导致结果有很大的差别 ;
+%%%%%%%%%% ----------------------------------------------------------------
+
+    
+    C=W(u);
+%     vtemp=C{1}{1,2};vtemp=double(abs(vtemp(:))>0);figure(1);stem(vtemp(700:900));ylim([0 1.1]);title(num2str(nstep));drawnow;
+   %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% 
+   
+    %%%%%%%%% solve d subproblem %%%%%%%%%%%%%%%%
+    Cpb=CoeffOper('+',C,b);
+%     d=CoeffOper('l0',Cpb,muLevel);
+    d=DALHT_ISD(Cpb,d,lambda,mu,gamma,M,frame);
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    
+    %%%%%%%%% update b subproblem %%%%%%%%%%%%%%%
+    deltab=CoeffOper('-',C,d);
+    b=CoeffOper('+',b,deltab);
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+   
+    %%%%%%%  The MDAL method ---Compute the mean value for convergence%%%%
+    %%%%%%%%%%%%%%%%%%%%%% Check the STOPPING CRETERION %%%%%%%%%%%
+    
+%     dmean=CoeffOper('+',d,dmean);
+%     bmean=CoeffOper('+',b,bmean);
+%     umeant=umean;umean=umean+u;
+%     error=norm(umean/nstep-umeant/(nstep-1),'fro')/normg;
+%     t2 = clock;
+%     uu = umean/nstep;
+%     meanresidual1=cellnorm(CoeffOper('-',W(uu),CoeffOper('*',dmean,1/nstep)))/normW;
+%     meanresidual2=cellnorm(CoeffOper('-',CoeffOper('*',dmean,1/nstep),DALHT(CoeffOper('+',CoeffOper('*',dmean,1/nstep),CoeffOper('*',bmean,1/nstep)),CoeffOper('*',dmean,1/nstep),lambda,mu,gamma)))/normW;
+% %     E1(nstep)=meanresidual1;E2(nstep)=meanresidual2;
+%     disp(['error on step ' num2str(nstep) ' is ' num2str(error) ', ' num2str(meanresidual1) ', and PSNR is ' num2str(psnr(uu/255,oimg/255)),'and SNR is ' num2str(snr(uu/255,oimg/255))]);
+%     t2 = etime(clock,t2);
+%     T2 = T2 + t2;
+%     T(nstep) = etime(clock,t1) - T2; 
+    
+%     if error<tol
+%         break;
+%     end
+      error1 = norm(u-uprev,'fro')/norm(u,'fro') ;
+%       error2 = norm(A(u)-f,'fro')/norm(f,'fro');
+%       if min(error1,error2)<tol
+if error1< tol 
+         break;
+     end
+        disp(['error on step ' num2str(nstep) ' is ' num2str(error1) ',  and SSIM is ' num2str(ssim_index(real(u),oimg)),'and SNR is ' num2str(snr(real(u),oimg)),'and PSNR is ' num2str(psnr(real(u),oimg))]);
+end
+% u=umean/nstep;
+T = T(1:nstep);
+
+%%%%%%%%%%%--------------------------
+% u(u>255)=255;u(u<0)=0;
+% u = abs(u) ; 
+u = real(u) ; %% 对内部得到的图像结果，取实部 ;
+%%%%%%%%%%%--------------------------
+
+
+function eigenP=eigenofP(ker,mu,m,n)
+
+[nker,mker]=size(ker);
+tmp=zeros(m,n);tmp(1:nker,1:mker)=ker;
+tmp=circshift(tmp,[-floor(nker/2),-floor(mker/2)]);
+eigenP=abs(fft2(tmp)).^2+mu;
+
+%%%%%%%%%%% another equally computing method of eigenP %%%%%%%%%%%%%%;
+% cker=rot90(ker,2);otf1 = psf2otf(ker,[m,n]);otf2 = psf2otf(cker,[m,n]);eigenP = otf1.*otf2 + mu ;
+
+function [D,R]=GenerateFrameletFilter(frame)
+if frame==0          %Haar Wavelet
+    D{1}=[0 1 1]/2;
+    D{2}=[0 1 -1]/2;
+    D{3}='cc';
+    R{1}=[1 1 0]/2;
+    R{2}=[-1 1 0]/2;
+    R{3}='cc';
+elseif frame==1      %Piecewise Linear Framelet
+    D{1}=[1 2 1]/4;
+    D{2}=[1 0 -1]/4*sqrt(2);
+    D{3}=[-1 2 -1]/4;
+    D{4}='ccc';
+    R{1}=[1 2 1]/4;
+    R{2}=[-1 0 1]/4*sqrt(2);
+    R{3}=[-1 2 -1]/4;
+    R{4}='ccc';
+elseif frame==3      %Piecewise Cubic Framelet
+    D{1}=[1 4 6 4 1]/16;
+    D{2}=[1 2 0 -2 -1]/8;
+    D{3}=[-1 0 2 0 -1]/16*sqrt(6);
+    D{4}=[-1 2 0 -2 1]/8;
+    D{5}=[1 -4 6 -4 1]/16;
+    D{6}='ccccc';
+    R{1}=[1 4 6 4 1]/16;
+    R{2}=[-1 -2 0 2 1]/8;
+    R{3}=[-1 0 2 0 -1]/16*sqrt(6);
+    R{4}=[1 -2 0 2 -1]/8;
+    R{5}=[1 -4 6 -4 1]/16;
+    R{6}='ccccc';
+end
+
+function muLevel=getwThresh(mu,wLevel,Level,D)
+nfilter=1;
+nD=length(D);
+if wLevel<=0
+    for ki=1:Level
+        for ji=1:nD-1
+            for jj=1:nD-1
+                muLevel{ki}{ji,jj}=mu*nfilter*norm(D{ji})*norm(D{jj});
+            end
+        end
+        nfilter=nfilter*norm(D{1});
+    end
+else
+    for ki=1:Level
+        for ji=1:nD-1
+            for jj=1:nD-1
+                if ji==1 && jj==1
+                    muLevel{ki}{ji,jj}=0;
+                else
+                    muLevel{ki}{ji,jj}=mu*nfilter;
+                end
+            end
+        end
+        %         muLevel{ki}{1,2}=0;muLevel{ki}{2,1}=0;
+        %         muLevel{ki}{2,2}=0;
+        %muLevel{ki}{2,3}=0;muLevel{ki}{3,2}=0;
+        %muLevel{ki}{3,3}=0;
+        nfilter=nfilter*wLevel;
+    end
+end
